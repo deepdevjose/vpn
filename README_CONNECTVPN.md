@@ -49,6 +49,11 @@ picker. Supported options are `zenity`, `kdialog`, `yad`, or Python `tkinter`.
 If none are available, the TUI falls back to a terminal path prompt. Imported
 profiles are copied into `~/.config/connectvpn/profiles/` automatically.
 
+Provider profiles that reference a missing legacy DNS script such as
+`/etc/openvpn/update-resolv-conf` are adapted in the managed copy when the local
+OpenVPN package provides a compatible DNS helper. On Fedora, this uses
+`/usr/libexec/openvpn/dns-updown`.
+
 To load credentials from an existing `auth-user-pass` file:
 
 ```bash
@@ -63,7 +68,8 @@ connectvpn --set-credentials --auth-file ./authopenVPN.txt
 - State/logs: `~/.local/state/connectvpn/`
 
 Credentials are stored outside the JSON with permission mode `600`. The JSON
-stores paths and metadata only.
+stores paths and metadata only. Connection logs are created as your user before
+OpenVPN starts so the TUI can display them even though OpenVPN runs with `sudo`.
 
 ## Useful Commands
 

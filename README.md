@@ -15,6 +15,8 @@ OpenVPN username/password on every connection.
 - One shared credential file for all imported profiles.
 - Imports one `.ovpn` file or every `.ovpn` file in the current directory.
 - Connects to a chosen server or a random server.
+- Adapts legacy `.ovpn` DNS hooks to the local OpenVPN DNS helper when
+  available, including Fedora's `/usr/libexec/openvpn/dns-updown`.
 - Starts OpenVPN as a daemon and tracks PID/log state.
 - Keeps credentials outside the repository with strict file permissions.
 - No third-party Python dependencies.
@@ -132,6 +134,12 @@ When available, `connectvpn` opens a native file picker for selecting a `.ovpn`
 file. If no graphical session or supported dialog tool is available, it falls
 back to a terminal path prompt. Imported profiles are copied into
 `~/.config/connectvpn/profiles/` and patched to use the shared credential file.
+
+Some provider profiles include legacy DNS scripts such as
+`/etc/openvpn/update-resolv-conf`. If that script is missing and the local
+OpenVPN package provides a compatible `dns-updown` helper, `connectvpn` patches
+the managed copy of the profile so OpenVPN can start cleanly on that distro.
+The original `.ovpn` file is not modified.
 
 Or use the CLI:
 

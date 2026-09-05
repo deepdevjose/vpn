@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +65,45 @@ class ConnectVPNTestCase(unittest.TestCase):
         patched = app.patch_ovpn_auth("client\nverb 3\n", Path("/safe/auth.txt"))
 
         self.assertTrue(patched.endswith("auth-user-pass /safe/auth.txt\n"))
+
+    def test_patch_ovpn_for_local_system_replaces_missing_legacy_dns_hook(self) -> None:
+        helper = self.root / "dns-updown"
+        raw = "\n".join(
+            [
+                "client",
+                "script-security 1",
+                "up /etc/openvpn/update-resolv-conf",
+                "down /etc/openvpn/update-resolv-conf",
+                "auth-user-pass",
+                "",
+            ]
+        )
+
+        patched = app.patch_ovpn_for_local_system(
+            raw,
+            Path("/safe/auth.txt"),
+            dns_helper=helper,
+            path_exists=lambda _path: False,
+        )
+
+        self.assertNotIn("update-resolv-conf", patched)
+        self.assertIn(f"dns-updown {helper}", patched)
+        self.assertIn("script-security 2", patched)
+        self.assertIn("auth-user-pass /safe/auth.txt", patched)
+
+    def test_patch_ovpn_for_local_system_keeps_legacy_dns_hook_when_available(self) -> None:
+        raw = "client\nup /etc/openvpn/update-resolv-conf\ndown /etc/openvpn/update-resolv-conf\n"
+
+        patched = app.patch_ovpn_for_local_system(
+            raw,
+            Path("/safe/auth.txt"),
+            dns_helper=self.root / "dns-updown",
+            path_exists=lambda _path: True,
+        )
+
+        self.assertIn("up /etc/openvpn/update-resolv-conf", patched)
+        self.assertIn("down /etc/openvpn/update-resolv-conf", patched)
+        self.assertNotIn("dns-updown", patched)
 
     def test_import_profile_uses_global_credentials_path(self) -> None:
         app.set_global_credentials("example-user", "example-password")
@@ -144,6 +184,42 @@ class ConnectVPNTestCase(unittest.TestCase):
         self.assertFalse(app.is_safe_removal_path(fake_home / ".local", fake_home))
         self.assertFalse(app.is_safe_removal_path(fake_home / ".local" / "share" / "other-tool", fake_home))
         self.assertFalse(app.is_safe_removal_path(Path("/tmp/connectvpn-workbench"), fake_home))
+
+    def test_prepare_log_file_creates_mode_600_file(self) -> None:
+        log_path = app.LOGS_DIR / "test.log"
+
+        app.prepare_log_file(log_path)
+
+        self.assertTrue(log_path.exists())
+        self.assertEqual(stat.S_IMODE(log_path.stat().st_mode), 0o600)
+
+    def test_tail_log_reads_latest_lines(self) -> None:
+        log_path = app.LOGS_DIR / "test.log"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+        self.assertEqual(app.tail_log(log_path, 2), ["two", "three"])
+
+    def test_tail_log_uses_sudo_fallback_for_unreadable_logs(self) -> None:
+        log_path = app.LOGS_DIR / "test.log"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text("hidden\n", encoding="utf-8")
+
+        with mock.patch("pathlib.Path.open", side_effect=PermissionError("denied")):
+            with mock.patch.object(app, "tail_log_with_sudo", return_value=["via sudo"]):
+                self.assertEqual(app.tail_log(log_path, 2), ["via sudo"])
+
+    def test_tail_log_explains_unreadable_old_root_logs(self) -> None:
+        log_path = app.LOGS_DIR / "test.log"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text("hidden\n", encoding="utf-8")
+
+        with mock.patch("pathlib.Path.open", side_effect=PermissionError("denied")):
+            with mock.patch.object(app, "tail_log_with_sudo", return_value=None):
+                lines = app.tail_log(log_path, 2)
+
+        self.assertIn("Log is not readable by this user", lines[0])
+        self.assertTrue(any("New connections" in line for line in lines))
 
 
 if __name__ == "__main__":

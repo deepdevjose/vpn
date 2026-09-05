@@ -15,6 +15,7 @@ import json
 import os
 import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,7 @@ from typing import Any, Callable
 
 
 APP_NAME = "connectvpn"
-VERSION = "0.3.5"
+VERSION = "0.3.6"
 
 CONFIG_HOME = Path(os.environ.get("CONNECTVPN_HOME", Path.home() / ".config" / APP_NAME))
 STATE_HOME = Path(os.environ.get("CONNECTVPN_STATE", Path.home() / ".local" / "state" / APP_NAME))
@@ -42,6 +43,11 @@ LEGACY_INSTALL_DIR = Path.home() / ".local" / "share" / "connectvpn-workbench"
 INSTALL_DIR = Path(os.environ.get("CONNECTVPN_INSTALL_DIR", DEFAULT_INSTALL_DIR))
 BIN_DIR = Path(os.environ.get("CONNECTVPN_BIN_DIR", Path.home() / ".local" / "bin"))
 BIN_PATH = BIN_DIR / APP_NAME
+LEGACY_UPDATE_RESOLV_CONF = Path("/etc/openvpn/update-resolv-conf")
+DNS_UPDOWN_HELPER_CANDIDATES = (
+    Path("/usr/libexec/openvpn/dns-updown"),
+    Path("/usr/lib/openvpn/dns-updown"),
+)
 
 LOGO = [
     "  ____ ___  _   _ _   _ _____ ____ _____     __     ______  _   _ ",
@@ -207,6 +213,31 @@ def path_is_relative_to(path: Path, parent: Path) -> bool:
         return False
 
 
+def prepare_log_file(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    chmod_quiet(path.parent, 0o700)
+    if not path_is_relative_to(path, LOGS_DIR):
+        raise ConnectVPNError(f"Refusing to write a log outside {LOGS_DIR}")
+    with path.open("a", encoding="utf-8"):
+        pass
+    chmod_quiet(path, 0o600)
+
+
+def make_log_readable(path: Path) -> None:
+    if not path_is_relative_to(path, LOGS_DIR):
+        return
+    uid_gid = f"{os.getuid()}:{os.getgid()}"
+    commands = (
+        ["sudo", "-n", "chown", uid_gid, str(path)],
+        ["sudo", "-n", "chmod", "600", str(path)],
+    )
+    for cmd in commands:
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
 def is_safe_removal_path(path: Path, home: Path | None = None) -> bool:
     resolved = path.expanduser().resolve()
     resolved_home = (home or Path.home()).expanduser().resolve()
@@ -319,6 +350,103 @@ def parse_remote_lines(ovpn_text: str) -> list[str]:
     return remotes[:8]
 
 
+def split_ovpn_directive(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped or stripped.startswith(("#", ";")):
+        return []
+    try:
+        return shlex.split(stripped, comments=False, posix=True)
+    except ValueError:
+        return stripped.split()
+
+
+def executable_file(path: Path) -> bool:
+    try:
+        return path.is_file() and os.access(path, os.X_OK)
+    except OSError:
+        return False
+
+
+def openvpn_dns_updown_helper() -> Path | None:
+    override = os.environ.get("CONNECTVPN_DNS_UPDOWN")
+    if override:
+        helper = expand_path(override)
+        return helper if executable_file(helper) else None
+
+    for helper in DNS_UPDOWN_HELPER_CANDIDATES:
+        if executable_file(helper):
+            return helper
+    return None
+
+
+def ensure_script_security_level(lines: list[str], minimum: int = 2) -> list[str]:
+    updated: list[str] = []
+    found = False
+
+    for line in lines:
+        parts = split_ovpn_directive(line)
+        if parts and parts[0] == "script-security":
+            found = True
+            try:
+                current_level = int(parts[1])
+            except (IndexError, ValueError):
+                current_level = 0
+            updated.append(line if current_level >= minimum else f"script-security {minimum}")
+        else:
+            updated.append(line)
+
+    if not found:
+        updated.append(f"script-security {minimum}")
+    return updated
+
+
+def patch_missing_legacy_dns_hooks(
+    ovpn_text: str,
+    dns_helper: Path | None = None,
+    path_exists: Callable[[Path], bool] | None = None,
+) -> str:
+    exists = path_exists or Path.exists
+    helper = dns_helper if dns_helper is not None else openvpn_dns_updown_helper()
+    lines = ovpn_text.splitlines()
+    patched: list[str] = []
+    removed_missing_legacy_hook = False
+    has_dns_updown = False
+
+    for line in lines:
+        parts = split_ovpn_directive(line)
+        if parts and parts[0] == "dns-updown":
+            has_dns_updown = True
+
+        if (
+            parts
+            and parts[0] in {"up", "down"}
+            and len(parts) >= 2
+            and Path(parts[1]) == LEGACY_UPDATE_RESOLV_CONF
+            and helper
+            and not exists(LEGACY_UPDATE_RESOLV_CONF)
+        ):
+            removed_missing_legacy_hook = True
+            continue
+
+        patched.append(line)
+
+    if removed_missing_legacy_hook and helper and not has_dns_updown:
+        patched = ensure_script_security_level(patched, 2)
+        patched.append(f"dns-updown {helper.as_posix()}")
+
+    return "\n".join(patched).rstrip() + "\n"
+
+
+def patch_ovpn_for_local_system(
+    ovpn_text: str,
+    auth_path: Path,
+    dns_helper: Path | None = None,
+    path_exists: Callable[[Path], bool] | None = None,
+) -> str:
+    patched = patch_ovpn_auth(ovpn_text, auth_path)
+    return patch_missing_legacy_dns_hooks(patched, dns_helper=dns_helper, path_exists=path_exists)
+
+
 def auth_file_has_minimum_shape(path: Path) -> bool:
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -378,7 +506,7 @@ def repatch_managed_profiles(cfg: dict[str, Any]) -> None:
         if not profile_path.exists():
             continue
         current = read_text(profile_path)
-        patched = patch_ovpn_auth(current, auth_path)
+        patched = patch_ovpn_for_local_system(current, auth_path)
         if patched != current:
             secure_write_text(profile_path, patched)
 
@@ -444,6 +572,13 @@ def require_global_credentials() -> Path:
     return auth_path
 
 
+def refresh_managed_profile(profile_path: Path, cfg: dict[str, Any]) -> None:
+    current = read_text(profile_path)
+    patched = patch_ovpn_for_local_system(current, credential_auth_path(cfg))
+    if patched != current:
+        secure_write_text(profile_path, patched)
+
+
 def import_profile(
     ovpn_path: Path,
     name: str | None,
@@ -463,7 +598,7 @@ def import_profile(
             server["name"] = server_name
             profile_path = Path(server["ovpn_path"]).expanduser()
             ovpn_text = read_text(source_ovpn)
-            patched = patch_ovpn_auth(ovpn_text, auth_path)
+            patched = patch_ovpn_for_local_system(ovpn_text, auth_path)
             secure_write_text(profile_path, patched)
             server["remotes"] = parse_remote_lines(ovpn_text)
             server.pop("auth_path", None)
@@ -474,7 +609,7 @@ def import_profile(
     profile_path = PROFILES_DIR / f"{server_id}.ovpn"
 
     ovpn_text = read_text(source_ovpn)
-    patched = patch_ovpn_auth(ovpn_text, auth_path)
+    patched = patch_ovpn_for_local_system(ovpn_text, auth_path)
     secure_write_text(profile_path, patched)
 
     server = {
@@ -677,8 +812,11 @@ def start_vpn(server: dict[str, Any]) -> dict[str, Any]:
     if not profile_path.exists():
         raise ConnectVPNError(f"Managed profile does not exist: {profile_path}")
 
+    refresh_managed_profile(profile_path, load_config())
+
     ensure_dirs()
     log_path = LOGS_DIR / f"{server['id']}-{int(time.time())}.log"
+    prepare_log_file(log_path)
     try:
         PID_PATH.unlink()
     except FileNotFoundError:
@@ -701,6 +839,7 @@ def start_vpn(server: dict[str, Any]) -> dict[str, Any]:
         str(log_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
+    make_log_readable(log_path)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
         raise ConnectVPNError(f"OpenVPN could not start. {detail}".strip())
@@ -713,6 +852,7 @@ def start_vpn(server: dict[str, Any]) -> dict[str, Any]:
         time.sleep(0.2)
 
     if not pid:
+        make_log_readable(log_path)
         raise ConnectVPNError(f"OpenVPN started without writing a PID. Check the log: {log_path}")
 
     state = {
@@ -756,6 +896,34 @@ def stop_vpn() -> str:
     return f"VPN disconnected: {state.get('server_name', state.get('server_id'))}"
 
 
+def tail_log_with_sudo(path: Path, lines: int) -> list[str] | None:
+    if not path_is_relative_to(path, LOGS_DIR):
+        return None
+    safe_lines = max(1, min(int(lines), 500))
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "tail", "-n", str(safe_lines), str(path)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.splitlines()
+
+
+def unreadable_log_message(path: Path) -> list[str]:
+    chown_command = f"sudo chown {os.getuid()}:{os.getgid()} {shlex.quote(str(path))}"
+    return [
+        f"Log is not readable by this user: {path}",
+        "Older logs may be owned by root from a previous connectvpn version.",
+        "New connections will create user-readable logs automatically.",
+        f"To fix this old log manually: {chown_command}",
+    ]
+
+
 def tail_log(path: str | Path, lines: int = 20) -> list[str]:
     log_path = Path(path)
     if not log_path.exists():
@@ -763,6 +931,11 @@ def tail_log(path: str | Path, lines: int = 20) -> list[str]:
     try:
         with log_path.open("r", encoding="utf-8", errors="replace") as fh:
             return fh.read().splitlines()[-lines:]
+    except PermissionError:
+        sudo_lines = tail_log_with_sudo(log_path, lines)
+        if sudo_lines is not None:
+            return sudo_lines
+        return unreadable_log_message(log_path)
     except OSError as exc:
         return [f"Could not read the log: {exc}"]
 

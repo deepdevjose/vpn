@@ -10,6 +10,7 @@ CONNECTVPN_REF="${CONNECTVPN_REF:-${DEFAULT_REF}}"
 CONNECTVPN_INSTALL_DIR="${CONNECTVPN_INSTALL_DIR:-${HOME}/.local/share/connectvpn}"
 CONNECTVPN_BIN_DIR="${CONNECTVPN_BIN_DIR:-${HOME}/.local/bin}"
 CONNECTVPN_TARBALL_URL="${CONNECTVPN_TARBALL_URL:-}"
+CONNECTVPN_SOURCE_DIR="${CONNECTVPN_SOURCE_DIR:-}"
 
 INSTALL_DEPS=0
 AUTO_INSTALL_PYTHON=1
@@ -26,6 +27,7 @@ Options:
   --install-deps      Install missing system dependencies with the detected package manager.
   --repo OWNER/REPO   GitHub repository to install from. Default: ${DEFAULT_REPO}
   --ref REF           Git branch, tag, or commit to install. Default: ${DEFAULT_REF}
+  --source DIR        Install from a local source tree instead of GitHub.
   --prefix DIR        Install source files into DIR. Default: ~/.local/share/connectvpn
   --bin-dir DIR       Install the connectvpn command into DIR. Default: ~/.local/bin
   -h, --help          Show this help.
@@ -36,6 +38,7 @@ Environment:
   CONNECTVPN_INSTALL_DIR
   CONNECTVPN_BIN_DIR
   CONNECTVPN_TARBALL_URL
+  CONNECTVPN_SOURCE_DIR
 EOF
 }
 
@@ -70,6 +73,11 @@ while [[ $# -gt 0 ]]; do
     --ref)
       [[ $# -ge 2 ]] || die "--ref requires a branch, tag, or commit"
       CONNECTVPN_REF="$2"
+      shift 2
+      ;;
+    --source)
+      [[ $# -ge 2 ]] || die "--source requires a directory"
+      CONNECTVPN_SOURCE_DIR="$2"
       shift 2
       ;;
     --prefix)
@@ -235,6 +243,24 @@ download_file() {
   fi
 }
 
+copy_source_tree() {
+  local source_dir="$1"
+  local install_dir="$2"
+
+  mkdir -p "${install_dir}"
+  tar \
+    --exclude='.git' \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    --exclude='*.ovpn' \
+    --exclude='*.auth' \
+    --exclude='auth*.txt' \
+    --exclude='*.log' \
+    --exclude='*.pid' \
+    -C "${source_dir}" \
+    -cf - . | tar -C "${install_dir}" -xf -
+}
+
 missing=()
 
 if ! python_is_supported; then
@@ -263,10 +289,6 @@ fi
 python_is_supported || die "Python 3.10 or newer is required."
 have tar || die "tar is required."
 
-if [[ -z "${CONNECTVPN_TARBALL_URL}" ]]; then
-  CONNECTVPN_TARBALL_URL="https://codeload.github.com/${CONNECTVPN_REPO}/tar.gz/${CONNECTVPN_REF}"
-fi
-
 TMP_DIR="$(mktemp -d)"
 cleanup() {
   if [[ -n "${TMP_DIR:-}" && -d "${TMP_DIR}" && "${TMP_DIR}" == /tmp/* ]]; then
@@ -275,16 +297,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ARCHIVE="${TMP_DIR}/connectvpn.tar.gz"
-say "Downloading connectvpn from ${CONNECTVPN_REPO}@${CONNECTVPN_REF}..."
-download_file "${CONNECTVPN_TARBALL_URL}" "${ARCHIVE}"
+if [[ -n "${CONNECTVPN_SOURCE_DIR}" ]]; then
+  SOURCE_DIR="$(cd "${CONNECTVPN_SOURCE_DIR}" && pwd)"
+  say "Installing connectvpn from local source: ${SOURCE_DIR}"
+else
+  if [[ -z "${CONNECTVPN_TARBALL_URL}" ]]; then
+    CONNECTVPN_TARBALL_URL="https://codeload.github.com/${CONNECTVPN_REPO}/tar.gz/${CONNECTVPN_REF}"
+  fi
 
-tar -xzf "${ARCHIVE}" -C "${TMP_DIR}"
-SOURCE_DIR="$(find "${TMP_DIR}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-[[ -n "${SOURCE_DIR}" && -f "${SOURCE_DIR}/connectvpn" && -d "${SOURCE_DIR}/src/connectvpn" ]] || die "Downloaded archive does not look like connectvpn."
+  ARCHIVE="${TMP_DIR}/connectvpn.tar.gz"
+  say "Downloading connectvpn from ${CONNECTVPN_REPO}@${CONNECTVPN_REF}..."
+  download_file "${CONNECTVPN_TARBALL_URL}" "${ARCHIVE}"
+
+  tar -xzf "${ARCHIVE}" -C "${TMP_DIR}"
+  SOURCE_DIR="$(find "${TMP_DIR}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+fi
+
+[[ -n "${SOURCE_DIR}" && -f "${SOURCE_DIR}/connectvpn" && -d "${SOURCE_DIR}/src/connectvpn" ]] || die "Source tree does not look like connectvpn."
 
 mkdir -p "${CONNECTVPN_INSTALL_DIR}" "${CONNECTVPN_BIN_DIR}"
-cp -R "${SOURCE_DIR}/." "${CONNECTVPN_INSTALL_DIR}/"
+copy_source_tree "${SOURCE_DIR}" "${CONNECTVPN_INSTALL_DIR}"
 chmod +x "${CONNECTVPN_INSTALL_DIR}/connectvpn"
 ln -sfn "${CONNECTVPN_INSTALL_DIR}/connectvpn" "${CONNECTVPN_BIN_DIR}/connectvpn"
 

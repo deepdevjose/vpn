@@ -11,16 +11,20 @@ supporting local development through the root `./connectvpn` wrapper.
 3. Imported `.ovpn` files are copied into `~/.config/connectvpn/profiles/`.
 4. Each managed profile is patched to use the shared auth file through
    `auth-user-pass /path/to/authopenvpn.auth`.
-5. The TUI opens a graphical `.ovpn` file picker when a desktop helper is
+5. Legacy DNS hooks that reference missing distro scripts are adapted in the
+   managed profile when OpenVPN provides a local `dns-updown` helper.
+6. The TUI opens a graphical `.ovpn` file picker when a desktop helper is
    available, then falls back to a terminal path prompt.
-6. Connections are started with `sudo openvpn --daemon`.
-7. Runtime state is tracked in `~/.local/state/connectvpn/`.
+7. Connections are started with `sudo openvpn --daemon`.
+8. Runtime state is tracked in `~/.local/state/connectvpn/`.
 
 ## Important Boundaries
 
 - Project files live in the repository.
 - User profiles, credentials, logs, and PID files live outside the repository.
 - The JSON config stores metadata and paths only.
+- Log files are pre-created as the normal user before OpenVPN is launched with
+  `sudo`, so the TUI can read them without exposing other system files.
 - OpenVPN remains the network/security engine; `connectvpn` only orchestrates it.
 
 ## Main Components
