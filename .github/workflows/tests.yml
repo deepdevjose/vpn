@@ -1,0 +1,27 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run unit tests
+        run: python -m unittest discover
+      - name: Compile sources
+        run: python -m py_compile connectvpn src/connectvpn/app.py
+      - name: Check shell scripts
+        run: bash -n install.sh scripts/install.sh scripts/uninstall.sh scripts/check_no_sensitive_files.sh
+      - name: Check tracked sensitive files
+        run: ./scripts/check_no_sensitive_files.sh

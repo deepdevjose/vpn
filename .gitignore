@@ -1,0 +1,36 @@
+# Personal files from this laptop. Never publish these.
+authopenVPN.txt
+japon.ovpn
+usa.ovpn
+
+# Local OpenVPN material. Keep personal profiles and credentials out of Git.
+*.ovpn
+*.auth
+auth*.txt
+authopenvpn.auth
+config.json
+profiles/
+credentials/
+
+# Runtime state and logs.
+*.log
+*.pid
+state.json
+.connectvpn/
+.config/
+.local/
+
+# Python cache/build outputs.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local editor/OS files.
+.DS_Store
+.idea/
+.vscode/
