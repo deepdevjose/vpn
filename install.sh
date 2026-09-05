@@ -81,6 +81,12 @@ raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
 PY
 }
 
+python_has_tkinter() {
+  have python3 && python3 - <<'PY' >/dev/null 2>&1
+import tkinter  # noqa: F401
+PY
+}
+
 if ! python_is_supported; then
   echo "Python 3.10+ was not found. Attempting to install or upgrade Python automatically..."
   install_python
@@ -100,6 +106,10 @@ ln -sf "${ROOT_DIR}/connectvpn" "${TARGET}"
 echo "connectvpn installed at ${TARGET}"
 if ! command -v openvpn >/dev/null 2>&1; then
   echo "Warning: openvpn is not installed or is not in PATH."
+fi
+if ! command -v zenity >/dev/null 2>&1 && ! command -v kdialog >/dev/null 2>&1 && ! command -v yad >/dev/null 2>&1 && ! python_has_tkinter; then
+  echo "Warning: no graphical file picker helper was detected."
+  echo "The TUI will fall back to a path prompt. Install zenity, kdialog, yad, or Python tkinter for file picker support."
 fi
 
 echo "If your shell cannot find it, add this to ~/.bashrc:"

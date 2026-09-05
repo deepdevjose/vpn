@@ -10,6 +10,8 @@ OpenVPN username/password on every connection.
 ## Features
 
 - Curses-based TUI with keyboard shortcuts.
+- Graphical file picker for selecting `.ovpn` files when a desktop dialog tool
+  is available.
 - One shared credential file for all imported profiles.
 - Imports one `.ovpn` file or every `.ovpn` file in the current directory.
 - Connects to a chosen server or a random server.
@@ -23,6 +25,10 @@ OpenVPN username/password on every connection.
 - Python 3.10+
 - `openvpn`
 - `sudo`
+
+Optional for graphical `.ovpn` selection from the TUI:
+
+- `zenity`, `kdialog`, `yad`, or Python `tkinter`
 
 Fedora example:
 
@@ -118,9 +124,14 @@ The file is written with permission mode `600`.
 From the TUI, use:
 
 ```text
-a  Add a new .ovpn profile
+a  Add a new .ovpn profile with a file picker
 i  Import all .ovpn profiles in the current folder
 ```
+
+When available, `connectvpn` opens a native file picker for selecting a `.ovpn`
+file. If no graphical session or supported dialog tool is available, it falls
+back to a terminal path prompt. Imported profiles are copied into
+`~/.config/connectvpn/profiles/` and patched to use the shared credential file.
 
 Or use the CLI:
 
@@ -147,8 +158,8 @@ From the TUI, use:
 u  Uninstall / remove from system
 ```
 
-By default, uninstall removes the installed command and app files while keeping
-your local config, imported profiles, credentials, logs, and state.
+By default, uninstall removes the installed command, app files, local config,
+imported profiles, credentials, logs, and state.
 
 CLI:
 
@@ -156,10 +167,11 @@ CLI:
 connectvpn --uninstall
 ```
 
-To remove user config and credentials too:
+To remove the app but keep local config, imported profiles, credentials, logs,
+and state:
 
 ```bash
-connectvpn --uninstall --purge
+connectvpn --uninstall --keep-user-data
 ```
 
 ## TUI Shortcuts
@@ -167,7 +179,7 @@ connectvpn --uninstall --purge
 ```text
 Enter  choose server and connect
 r      connect to a random server
-a      add one .ovpn profile
+a      add one .ovpn profile with a file picker
 i      import .ovpn profiles from the current folder
 m      modify global credentials
 s      show status and latest log lines

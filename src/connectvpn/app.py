@@ -26,7 +26,7 @@ from typing import Any, Callable
 
 
 APP_NAME = "connectvpn"
-VERSION = "0.3.3"
+VERSION = "0.3.5"
 
 CONFIG_HOME = Path(os.environ.get("CONNECTVPN_HOME", Path.home() / ".config" / APP_NAME))
 STATE_HOME = Path(os.environ.get("CONNECTVPN_STATE", Path.home() / ".local" / "state" / APP_NAME))
@@ -54,6 +54,10 @@ LOGO = [
 
 class ConnectVPNError(Exception):
     """Expected user-facing error."""
+
+
+class FilePickerCanceled(Exception):
+    """Raised when the user cancels a graphical file picker."""
 
 
 def now_iso() -> str:
@@ -231,7 +235,7 @@ def remove_tree_safely(path: Path) -> bool:
     return True
 
 
-def uninstall_from_system(remove_user_data: bool = False) -> list[str]:
+def uninstall_from_system(remove_user_data: bool = True) -> list[str]:
     if current_connection():
         raise ConnectVPNError("Disconnect the active VPN before uninstalling connectvpn.")
 
@@ -506,6 +510,116 @@ def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+def gui_session_available() -> bool:
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def normalized_dialog_dir(initial_dir: Path | None = None) -> Path:
+    candidate = (initial_dir or Path.cwd()).expanduser()
+    if candidate.is_file():
+        candidate = candidate.parent
+    if not candidate.exists():
+        candidate = Path.home()
+    return candidate.resolve()
+
+
+def run_file_dialog_command(cmd: list[str], env: dict[str, str] | None = None) -> Path | None:
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+    if result.returncode == 0:
+        selected = result.stdout.strip().splitlines()
+        if selected:
+            return expand_path(selected[-1])
+        return None
+
+    if result.returncode in (1, 130, 255):
+        raise FilePickerCanceled()
+
+    return None
+
+
+def select_ovpn_file_with_dialog(initial_dir: Path | None = None) -> Path | None:
+    if not gui_session_available():
+        return None
+
+    start_dir = normalized_dialog_dir(initial_dir)
+    start_with_sep = str(start_dir) + os.sep
+
+    candidates: list[list[str]] = []
+    if command_exists("zenity"):
+        candidates.append(
+            [
+                "zenity",
+                "--file-selection",
+                "--title=Select OpenVPN profile",
+                f"--filename={start_with_sep}",
+                "--file-filter=OpenVPN profiles (*.ovpn) | *.ovpn",
+                "--file-filter=All files | *",
+            ]
+        )
+    if command_exists("kdialog"):
+        candidates.append(
+            [
+                "kdialog",
+                "--title",
+                "Select OpenVPN profile",
+                "--getopenfilename",
+                str(start_dir),
+                "OpenVPN profiles (*.ovpn)",
+            ]
+        )
+    if command_exists("yad"):
+        candidates.append(
+            [
+                "yad",
+                "--file-selection",
+                "--title=Select OpenVPN profile",
+                f"--filename={start_with_sep}",
+                "--file-filter=OpenVPN profiles (*.ovpn) | *.ovpn",
+                "--file-filter=All files | *",
+            ]
+        )
+
+    python_cmd = shutil.which("python3") or sys.executable
+    if python_cmd:
+        tkinter_code = (
+            "try:\n"
+            "    import os\n"
+            "    import tkinter as tk\n"
+            "    from tkinter import filedialog\n"
+            "    root = tk.Tk()\n"
+            "    root.withdraw()\n"
+            "    root.attributes('-topmost', True)\n"
+            "    path = filedialog.askopenfilename(\n"
+            "        title='Select OpenVPN profile',\n"
+            "        initialdir=os.environ.get('CONNECTVPN_FILE_DIALOG_DIR'),\n"
+            "        filetypes=[('OpenVPN profiles', '*.ovpn'), ('All files', '*')],\n"
+            "    )\n"
+            "    root.destroy()\n"
+            "except Exception:\n"
+            "    raise SystemExit(2)\n"
+            "if not path:\n"
+            "    raise SystemExit(1)\n"
+            "print(path)\n"
+        )
+        dialog_env = dict(os.environ)
+        dialog_env["CONNECTVPN_FILE_DIALOG_DIR"] = str(start_dir)
+        candidates.append([python_cmd, "-c", tkinter_code])
+    else:
+        dialog_env = None
+
+    for cmd in candidates:
+        env = dialog_env if len(cmd) >= 3 and cmd[1] == "-c" else None
+        selected = run_file_dialog_command(cmd, env=env)
+        if selected:
+            return selected
+
+    return None
+
+
 def require_runtime_tools() -> None:
     missing = [name for name in ("sudo", "openvpn") if not command_exists(name)]
     if missing:
@@ -735,7 +849,7 @@ class TUI:
             return []
         lowered = key_label.lower()
         if lowered in ("enter", "return"):
-            return [curses.KEY_ENTER, 10, 13]
+            return []
         if len(key_label) == 1:
             char = key_label[0]
             return [ord(char.lower()), ord(char.upper())]
@@ -942,7 +1056,7 @@ class TUI:
         print("If sudo prompts, enter your system password.\n")
         try:
             result = fn()
-            print("\nListo.")
+            print("\nDone.")
             if isinstance(result, dict):
                 if result.get("server_name"):
                     print(f"Server: {result['server_name']}")
@@ -967,6 +1081,33 @@ class TUI:
         curses.curs_set(0)
         self.stdscr.clear()
         return result
+
+    def pick_ovpn_file(self) -> Path | None:
+        if gui_session_available():
+            curses.def_prog_mode()
+            curses.endwin()
+            print(f"\n{APP_NAME}: opening file picker")
+            print("Select a .ovpn file in the dialog window.\n")
+            canceled = False
+            selected: Path | None = None
+            try:
+                selected = select_ovpn_file_with_dialog(Path.cwd())
+            except FilePickerCanceled:
+                canceled = True
+            finally:
+                curses.reset_prog_mode()
+                curses.curs_set(0)
+                self.stdscr.clear()
+
+            if selected:
+                return selected
+            if canceled:
+                return None
+
+        ovpn = self.prompt("Add Server", "Path to .ovpn file:")
+        if not ovpn:
+            return None
+        return expand_path(ovpn)
 
     def configure_credentials_manual(self) -> bool:
         username = self.prompt("Credentials", "OpenVPN username:")
@@ -1064,10 +1205,9 @@ class TUI:
         self.run_external(f"connecting to {server['name']}", lambda: start_vpn(server))
 
     def add_server(self) -> None:
-        ovpn = self.prompt("Add Server", "Path to .ovpn file:")
-        if not ovpn:
+        ovpn_path = self.pick_ovpn_file()
+        if not ovpn_path:
             return
-        ovpn_path = expand_path(ovpn)
         default_name = ovpn_path.stem if ovpn_path.name else ""
         name = self.prompt("Add Server", "Server name:", default_name)
         if name is None:
@@ -1075,7 +1215,14 @@ class TUI:
 
         try:
             server = import_profile(ovpn_path, name)
-            self.message("Server Added", [f"Added: {server['name']}", f"ID: {server['id']}"])
+            self.message(
+                "Server Added",
+                [
+                    f"Added: {server['name']}",
+                    f"ID: {server['id']}",
+                    f"Managed profile: {server['ovpn_path']}",
+                ],
+            )
         except ConnectVPNError as exc:
             self.message("Could Not Add", [str(exc)])
 
@@ -1100,7 +1247,7 @@ class TUI:
     def uninstall(self) -> None:
         confirmed = self.confirm(
             "Uninstall connectvpn",
-            "Remove the installed command and app files? User config and credentials will be kept.",
+            "Remove the app, credentials, imported servers, logs, and state?",
         )
         if not confirmed:
             return
@@ -1182,8 +1329,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list", action="store_true", help="List imported servers.")
     parser.add_argument("--status", action="store_true", help="Show the current status.")
     parser.add_argument("--disconnect", action="store_true", help="Disconnect the active VPN.")
-    parser.add_argument("--uninstall", action="store_true", help="Remove the installed command and app files.")
-    parser.add_argument("--purge", action="store_true", help="With --uninstall, also remove connectvpn config and credentials.")
+    parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Remove connectvpn, including config, credentials, imported profiles, logs, and state.",
+    )
+    parser.add_argument(
+        "--keep-user-data",
+        action="store_true",
+        help="With --uninstall, keep config, credentials, imported profiles, logs, and state.",
+    )
+    parser.add_argument("--purge", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--random", action="store_true", help="Connect to a random server.")
     parser.add_argument("--connect", metavar="ID_OR_NAME", help="Connect to a server by ID or name.")
     parser.add_argument("--import", dest="import_ovpn", metavar="FILE.ovpn", help="Import a .ovpn profile.")
@@ -1262,8 +1418,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.purge and not args.uninstall:
             raise ConnectVPNError("--purge can only be used with --uninstall.")
+        if args.keep_user_data and not args.uninstall:
+            raise ConnectVPNError("--keep-user-data can only be used with --uninstall.")
+        if args.purge and args.keep_user_data:
+            raise ConnectVPNError("--purge and --keep-user-data cannot be used together.")
         if args.uninstall:
-            for line in uninstall_from_system(remove_user_data=args.purge):
+            for line in uninstall_from_system(remove_user_data=not args.keep_user_data):
                 print(line)
             return 0
         if args.set_credentials:

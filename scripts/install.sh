@@ -212,6 +212,16 @@ raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
 PY
 }
 
+python_has_tkinter() {
+  have python3 && python3 - <<'PY' >/dev/null 2>&1
+import tkinter  # noqa: F401
+PY
+}
+
+file_picker_available() {
+  have zenity || have kdialog || have yad || python_has_tkinter
+}
+
 download_file() {
   local url="$1"
   local output="$2"
@@ -283,6 +293,12 @@ python3 -m py_compile "${CONNECTVPN_INSTALL_DIR}/connectvpn" "${CONNECTVPN_INSTA
 say "connectvpn installed at ${CONNECTVPN_BIN_DIR}/connectvpn"
 if ! have openvpn; then
   warn "openvpn is still missing. connectvpn can open, but it cannot connect until OpenVPN is installed."
+fi
+
+if ! file_picker_available; then
+  warn "No graphical file picker helper was detected."
+  warn "The TUI will still work and fall back to a path prompt."
+  warn "For file picker support, install zenity, kdialog, yad, or Python tkinter."
 fi
 
 case ":${PATH}:" in

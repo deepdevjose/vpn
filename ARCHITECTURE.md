@@ -11,8 +11,10 @@ supporting local development through the root `./connectvpn` wrapper.
 3. Imported `.ovpn` files are copied into `~/.config/connectvpn/profiles/`.
 4. Each managed profile is patched to use the shared auth file through
    `auth-user-pass /path/to/authopenvpn.auth`.
-5. Connections are started with `sudo openvpn --daemon`.
-6. Runtime state is tracked in `~/.local/state/connectvpn/`.
+5. The TUI opens a graphical `.ovpn` file picker when a desktop helper is
+   available, then falls back to a terminal path prompt.
+6. Connections are started with `sudo openvpn --daemon`.
+7. Runtime state is tracked in `~/.local/state/connectvpn/`.
 
 ## Important Boundaries
 

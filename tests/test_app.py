@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -104,6 +105,34 @@ class ConnectVPNTestCase(unittest.TestCase):
 
         self.assertEqual(len(remotes), 8)
         self.assertEqual(remotes[0], "remote 10.0.0.0 443")
+
+    def test_enter_is_not_registered_as_global_menu_hotkey(self) -> None:
+        tui = app.TUI.__new__(app.TUI)
+
+        self.assertEqual(tui.key_codes("Enter"), [])
+        self.assertIn(ord("r"), tui.key_codes("r"))
+
+    def test_normalized_dialog_dir_uses_parent_for_files(self) -> None:
+        profile = self.write_profile()
+
+        self.assertEqual(app.normalized_dialog_dir(profile), self.root)
+
+    def test_run_file_dialog_command_returns_selected_path(self) -> None:
+        profile = self.write_profile()
+        selected = app.run_file_dialog_command([sys.executable, "-c", f"print({str(profile)!r})"])
+
+        self.assertEqual(selected, profile.resolve())
+
+    def test_select_ovpn_file_with_dialog_returns_none_without_gui(self) -> None:
+        old_display = os.environ.pop("DISPLAY", None)
+        old_wayland = os.environ.pop("WAYLAND_DISPLAY", None)
+        try:
+            self.assertIsNone(app.select_ovpn_file_with_dialog(self.root))
+        finally:
+            if old_display is not None:
+                os.environ["DISPLAY"] = old_display
+            if old_wayland is not None:
+                os.environ["WAYLAND_DISPLAY"] = old_wayland
 
     def test_safe_removal_path_requires_home_scope_and_app_name(self) -> None:
         fake_home = self.root / "home"

@@ -44,6 +44,11 @@ connectvpn --import ./server.ovpn --name "My Server"
 You can also do this from the TUI with `Add a new .ovpn server` or
 `Import .ovpn files from this folder`.
 
+When a desktop dialog tool is available, `Add a new .ovpn server` opens a file
+picker. Supported options are `zenity`, `kdialog`, `yad`, or Python `tkinter`.
+If none are available, the TUI falls back to a terminal path prompt. Imported
+profiles are copied into `~/.config/connectvpn/profiles/` automatically.
+
 To load credentials from an existing `auth-user-pass` file:
 
 ```bash
@@ -72,15 +77,16 @@ connectvpn --disconnect
 connectvpn --uninstall
 ```
 
-`connectvpn --uninstall` removes the installed command and app files, but keeps
-config and credentials. Use `connectvpn --uninstall --purge` to remove local
-config and credentials too.
+`connectvpn --uninstall` removes the installed command, app files, config,
+credentials, imported profiles, logs, and state. Use
+`connectvpn --uninstall --keep-user-data` to remove the app but keep local user
+data.
 
 ## TUI Shortcuts
 
 - `Enter`: choose a server and connect
 - `r`: connect to a random server
-- `a`: add a new `.ovpn` server
+- `a`: add a new `.ovpn` server with a file picker
 - `i`: import `.ovpn` files from the current folder
 - `m`: modify global credentials
 - `s`: show status/log
