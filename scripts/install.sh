@@ -2,12 +2,12 @@
 set -euo pipefail
 
 APP_NAME="connectvpn"
-DEFAULT_REPO="deepdevjose/connectvpn-workbench"
+DEFAULT_REPO="deepdevjose/vpn"
 DEFAULT_REF="main"
 
 CONNECTVPN_REPO="${CONNECTVPN_REPO:-${DEFAULT_REPO}}"
 CONNECTVPN_REF="${CONNECTVPN_REF:-${DEFAULT_REF}}"
-CONNECTVPN_INSTALL_DIR="${CONNECTVPN_INSTALL_DIR:-${HOME}/.local/share/connectvpn-workbench}"
+CONNECTVPN_INSTALL_DIR="${CONNECTVPN_INSTALL_DIR:-${HOME}/.local/share/connectvpn}"
 CONNECTVPN_BIN_DIR="${CONNECTVPN_BIN_DIR:-${HOME}/.local/bin}"
 CONNECTVPN_TARBALL_URL="${CONNECTVPN_TARBALL_URL:-}"
 
@@ -26,7 +26,7 @@ Options:
   --install-deps      Install missing system dependencies with the detected package manager.
   --repo OWNER/REPO   GitHub repository to install from. Default: ${DEFAULT_REPO}
   --ref REF           Git branch, tag, or commit to install. Default: ${DEFAULT_REF}
-  --prefix DIR        Install source files into DIR. Default: ~/.local/share/connectvpn-workbench
+  --prefix DIR        Install source files into DIR. Default: ~/.local/share/connectvpn
   --bin-dir DIR       Install the connectvpn command into DIR. Default: ~/.local/bin
   -h, --help          Show this help.
 

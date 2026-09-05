@@ -10,7 +10,7 @@ Local TUI for managing OpenVPN profiles from the terminal.
 Remote install after publishing:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/deepdevjose/connectvpn-workbench/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/deepdevjose/vpn/main/scripts/install.sh | bash
 ```
 
 The remote installer automatically tries to install or upgrade Python if

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONNECTVPN_INSTALL_DIR="${CONNECTVPN_INSTALL_DIR:-${HOME}/.local/share/connectvpn-workbench}"
+CONNECTVPN_INSTALL_DIR="${CONNECTVPN_INSTALL_DIR:-${HOME}/.local/share/connectvpn}"
 CONNECTVPN_BIN_DIR="${CONNECTVPN_BIN_DIR:-${HOME}/.local/bin}"
 
 echo "This removes the installed app, but keeps user config and credentials."

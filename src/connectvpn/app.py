@@ -26,7 +26,7 @@ from typing import Any, Callable
 
 
 APP_NAME = "connectvpn"
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 
 CONFIG_HOME = Path(os.environ.get("CONNECTVPN_HOME", Path.home() / ".config" / APP_NAME))
 STATE_HOME = Path(os.environ.get("CONNECTVPN_STATE", Path.home() / ".local" / "state" / APP_NAME))
@@ -37,7 +37,9 @@ GLOBAL_AUTH_PATH = CONFIG_HOME / "authopenvpn.auth"
 LOGS_DIR = STATE_HOME / "logs"
 STATE_PATH = STATE_HOME / "state.json"
 PID_PATH = STATE_HOME / "openvpn.pid"
-INSTALL_DIR = Path(os.environ.get("CONNECTVPN_INSTALL_DIR", Path.home() / ".local" / "share" / "connectvpn-workbench"))
+DEFAULT_INSTALL_DIR = Path.home() / ".local" / "share" / APP_NAME
+LEGACY_INSTALL_DIR = Path.home() / ".local" / "share" / "connectvpn-workbench"
+INSTALL_DIR = Path(os.environ.get("CONNECTVPN_INSTALL_DIR", DEFAULT_INSTALL_DIR))
 BIN_DIR = Path(os.environ.get("CONNECTVPN_BIN_DIR", Path.home() / ".local" / "bin"))
 BIN_PATH = BIN_DIR / APP_NAME
 
@@ -239,9 +241,13 @@ def uninstall_from_system(remove_user_data: bool = False) -> list[str]:
         bin_path.unlink()
         removed.append(f"Removed command: {bin_path}")
 
-    install_dir = INSTALL_DIR.expanduser()
-    if remove_tree_safely(install_dir):
-        removed.append(f"Removed install directory: {install_dir}")
+    install_dirs = [INSTALL_DIR.expanduser()]
+    if "CONNECTVPN_INSTALL_DIR" not in os.environ and LEGACY_INSTALL_DIR.expanduser() not in install_dirs:
+        install_dirs.append(LEGACY_INSTALL_DIR.expanduser())
+
+    for install_dir in install_dirs:
+        if remove_tree_safely(install_dir):
+            removed.append(f"Removed install directory: {install_dir}")
 
     if remove_user_data:
         if remove_tree_safely(CONFIG_HOME):

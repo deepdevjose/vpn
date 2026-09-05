@@ -35,7 +35,7 @@ sudo dnf install openvpn python3
 After the repository is public, users can install with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/deepdevjose/connectvpn-workbench/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/deepdevjose/vpn/main/scripts/install.sh | bash
 ```
 
 The installer automatically tries to install or upgrade Python when `python3`
@@ -45,19 +45,19 @@ To let the installer also try to install other missing system dependencies,
 such as OpenVPN and `tar`, on common distros:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/deepdevjose/connectvpn-workbench/main/scripts/install.sh | bash -s -- --install-deps
+curl -fsSL https://raw.githubusercontent.com/deepdevjose/vpn/main/scripts/install.sh | bash -s -- --install-deps
 ```
 
 Safer manual review flow:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/deepdevjose/connectvpn-workbench/main/scripts/install.sh -o install-connectvpn.sh
+curl -fsSL https://raw.githubusercontent.com/deepdevjose/vpn/main/scripts/install.sh -o install-connectvpn.sh
 less install-connectvpn.sh
 bash install-connectvpn.sh
 ```
 
 If you publish under a different repository name, replace
-`deepdevjose/connectvpn-workbench` in the URL or run:
+`deepdevjose/vpn` in the URL or run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/scripts/install.sh | bash -s -- --repo YOUR_USER/YOUR_REPO
@@ -85,8 +85,8 @@ minimal, immutable, container-based, or non-systemd/non-sudo setups.
 ## Install From Source
 
 ```bash
-git clone https://github.com/YOUR_USER/connectvpn-workbench.git
-cd connectvpn-workbench
+git clone https://github.com/deepdevjose/vpn.git
+cd vpn
 ./install.sh
 ```
 

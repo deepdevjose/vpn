@@ -28,7 +28,7 @@ class ConnectVPNTestCase(unittest.TestCase):
         app.LOGS_DIR = self.state_home / "logs"
         app.STATE_PATH = self.state_home / "state.json"
         app.PID_PATH = self.state_home / "openvpn.pid"
-        app.INSTALL_DIR = self.root / "home" / ".local" / "share" / "connectvpn-workbench"
+        app.INSTALL_DIR = self.root / "home" / ".local" / "share" / "connectvpn"
         app.BIN_DIR = self.root / "home" / ".local" / "bin"
         app.BIN_PATH = app.BIN_DIR / app.APP_NAME
 
