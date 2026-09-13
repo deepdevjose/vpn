@@ -2,17 +2,17 @@
 
 Terminal UI and CLI for managing Proton VPN/OpenVPN profiles on Linux.
 
-`connectvpn` keeps one shared OpenVPN credential file and rewrites imported
-`.ovpn` profiles to use it automatically. It is designed for people who have
-multiple OpenVPN profiles from the same provider and do not want to type their
-OpenVPN username/password on every connection.
+`connectvpn` manages multiple VPN services and rewrites imported `.ovpn`
+profiles to use the credential file belonging to each service. Configure
+ProtonVPN, NordVPN, or another OpenVPN provider once and reuse its credentials
+for every imported server from that service.
 
 ## Features
 
 - Curses-based TUI with keyboard shortcuts.
 - Graphical file picker for selecting `.ovpn` files when a desktop dialog tool
   is available.
-- One shared credential file for all imported profiles.
+- Multiple named VPN services, each with its own credential file.
 - Imports one `.ovpn` file or every `.ovpn` file in the current directory.
 - Connects to a chosen server or a random server.
 - Adapts legacy `.ovpn` DNS hooks to the local OpenVPN DNS helper when
@@ -112,11 +112,11 @@ Make sure `~/.local/bin` is in your `PATH`.
 connectvpn
 ```
 
-On first launch, the TUI asks for your OpenVPN username and password once. The
-credentials are stored at:
+When you add a VPN service, the TUI asks for its OpenVPN username and password
+once. The credentials are stored under:
 
 ```bash
-~/.config/connectvpn/authopenvpn.auth
+~/.config/connectvpn/credentials/<service-id>.auth
 ```
 
 The file is written with permission mode `600`.
@@ -133,7 +133,8 @@ i  Import all .ovpn profiles in the current folder
 When available, `connectvpn` opens a native file picker for selecting a `.ovpn`
 file. If no graphical session or supported dialog tool is available, it falls
 back to a terminal path prompt. Imported profiles are copied into
-`~/.config/connectvpn/profiles/` and patched to use the shared credential file.
+`~/.config/connectvpn/profiles/` and patched to use the selected service's
+credential file.
 
 Some provider profiles include legacy DNS scripts such as
 `/etc/openvpn/update-resolv-conf`. If that script is missing and the local
@@ -187,9 +188,10 @@ connectvpn --uninstall --keep-user-data
 ```text
 Enter  choose server and connect
 r      connect to a random server
+v      add a VPN service and its credentials
 a      add one .ovpn profile with a file picker
 i      import .ovpn profiles from the current folder
-m      modify global credentials
+m      modify service credentials
 s      show status and latest log lines
 d      disconnect
 u      uninstall / remove from system

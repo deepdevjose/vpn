@@ -2,6 +2,7 @@
 authopenVPN.txt
 japon.ovpn
 usa.ovpn
+/ovpns_files
 
 # Local OpenVPN material. Keep personal profiles and credentials out of Git.
 *.ovpn

@@ -27,7 +27,7 @@ from typing import Any, Callable
 
 
 APP_NAME = "connectvpn"
-VERSION = "0.3.6"
+VERSION = "0.4.0"
 
 CONFIG_HOME = Path(os.environ.get("CONNECTVPN_HOME", Path.home() / ".config" / APP_NAME))
 STATE_HOME = Path(os.environ.get("CONNECTVPN_STATE", Path.home() / ".local" / "state" / APP_NAME))
@@ -89,13 +89,21 @@ def ensure_dirs() -> None:
 
 def default_config() -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "created_at": now_iso(),
         "credentials": {
             "mode": "global",
             "auth_path": str(GLOBAL_AUTH_PATH),
             "updated_at": None,
         },
+        "services": [
+            {
+                "id": "default",
+                "name": "Default service",
+                "auth_path": str(GLOBAL_AUTH_PATH),
+                "updated_at": None,
+            }
+        ],
         "servers": [],
     }
 
@@ -121,6 +129,48 @@ def normalize_config(cfg: dict[str, Any]) -> bool:
         credentials["mode"] = "global"
         changed = True
 
+    services = cfg.get("services")
+    if not isinstance(services, list):
+        cfg["services"] = [
+            {
+                "id": "default",
+                "name": "Default service",
+                "auth_path": str(credentials.get("auth_path") or GLOBAL_AUTH_PATH),
+                "updated_at": credentials.get("updated_at"),
+            }
+        ]
+        services = cfg["services"]
+        changed = True
+
+    if not services:
+        services.append(
+            {
+                "id": "default",
+                "name": "Default service",
+                "auth_path": str(GLOBAL_AUTH_PATH),
+                "updated_at": None,
+            }
+        )
+        changed = True
+
+    service_ids = {service.get("id") for service in services if isinstance(service, dict)}
+    if "default" not in service_ids:
+        services.insert(
+            0,
+            {
+                "id": "default",
+                "name": "Default service",
+                "auth_path": str(credentials.get("auth_path") or GLOBAL_AUTH_PATH),
+                "updated_at": credentials.get("updated_at"),
+            },
+        )
+        changed = True
+
+    for server in cfg.get("servers", []):
+        if not server.get("service_id"):
+            server["service_id"] = "default"
+            changed = True
+
     return changed
 
 
@@ -129,6 +179,48 @@ def credential_auth_path(cfg: dict[str, Any] | None = None) -> Path:
         cfg = load_config()
     raw_path = cfg.get("credentials", {}).get("auth_path") or str(GLOBAL_AUTH_PATH)
     return expand_path(raw_path)
+
+
+def service_by_id(cfg: dict[str, Any], service_id: str) -> dict[str, Any] | None:
+    for service in cfg.get("services", []):
+        if service.get("id") == service_id:
+            return service
+    return None
+
+
+def service_auth_path(cfg: dict[str, Any], service_id: str = "default") -> Path:
+    service = service_by_id(cfg, service_id) or service_by_id(cfg, "default")
+    if service:
+        return expand_path(service.get("auth_path") or credential_auth_path(cfg))
+    return credential_auth_path(cfg)
+
+
+def service_credentials_ready(cfg: dict[str, Any], service_id: str = "default") -> bool:
+    return auth_file_has_minimum_shape(service_auth_path(cfg, service_id))
+
+
+def make_service_id(name: str, cfg: dict[str, Any]) -> str:
+    existing = {service.get("id") for service in cfg.get("services", [])}
+    base = slugify(name)
+    candidate = base
+    while candidate in existing:
+        candidate = f"{base}-{uuid.uuid4().hex[:6]}"
+    return candidate
+
+
+def add_service(cfg: dict[str, Any], name: str) -> dict[str, Any]:
+    service_name = name.strip()
+    if not service_name:
+        raise ConnectVPNError("Service name cannot be empty.")
+    service_id = make_service_id(service_name, cfg)
+    service = {
+        "id": service_id,
+        "name": service_name,
+        "auth_path": str(CREDENTIALS_DIR / f"{service_id}.auth"),
+        "updated_at": None,
+    }
+    cfg.setdefault("services", []).append(service)
+    return service
 
 
 def global_credentials_ready(cfg: dict[str, Any] | None = None) -> bool:
@@ -497,7 +589,6 @@ def secure_copy_auth(source: Path, dest: Path) -> None:
 
 
 def repatch_managed_profiles(cfg: dict[str, Any]) -> None:
-    auth_path = credential_auth_path(cfg)
     for server in cfg.get("servers", []):
         raw_profile = server.get("ovpn_path")
         if not raw_profile:
@@ -506,7 +597,7 @@ def repatch_managed_profiles(cfg: dict[str, Any]) -> None:
         if not profile_path.exists():
             continue
         current = read_text(profile_path)
-        patched = patch_ovpn_for_local_system(current, auth_path)
+        patched = patch_ovpn_for_local_system(current, service_auth_path(cfg, server.get("service_id", "default")))
         if patched != current:
             secure_write_text(profile_path, patched)
 
@@ -545,6 +636,9 @@ def set_global_credentials(username: str, password: str) -> Path:
     auth_path = credential_auth_path(cfg)
     secure_write_text(auth_path, f"{username}\n{password}\n")
     cfg["credentials"]["updated_at"] = now_iso()
+    default_service = service_by_id(cfg, "default")
+    if default_service:
+        default_service["updated_at"] = cfg["credentials"]["updated_at"]
     cfg["credentials"].pop("migrated_from", None)
     repatch_managed_profiles(cfg)
     save_config(cfg)
@@ -556,7 +650,38 @@ def set_global_credentials_from_file(source: Path) -> Path:
     auth_path = credential_auth_path(cfg)
     secure_copy_auth(expand_path(source), auth_path)
     cfg["credentials"]["updated_at"] = now_iso()
+    default_service = service_by_id(cfg, "default")
+    if default_service:
+        default_service["updated_at"] = cfg["credentials"]["updated_at"]
     cfg["credentials"].pop("migrated_from", None)
+    repatch_managed_profiles(cfg)
+    save_config(cfg)
+    return auth_path
+
+
+def set_service_credentials(service_id: str, username: str, password: str) -> Path:
+    if not username.strip():
+        raise ConnectVPNError("Username cannot be empty.")
+    cfg = load_config()
+    service = service_by_id(cfg, service_id)
+    if not service:
+        raise ConnectVPNError(f"Service not found: {service_id}")
+    auth_path = service_auth_path(cfg, service_id)
+    secure_write_text(auth_path, f"{username}\n{password}\n")
+    service["updated_at"] = now_iso()
+    repatch_managed_profiles(cfg)
+    save_config(cfg)
+    return auth_path
+
+
+def set_service_credentials_from_file(service_id: str, source: Path) -> Path:
+    cfg = load_config()
+    service = service_by_id(cfg, service_id)
+    if not service:
+        raise ConnectVPNError(f"Service not found: {service_id}")
+    auth_path = service_auth_path(cfg, service_id)
+    secure_copy_auth(expand_path(source), auth_path)
+    service["updated_at"] = now_iso()
     repatch_managed_profiles(cfg)
     save_config(cfg)
     return auth_path
@@ -572,9 +697,9 @@ def require_global_credentials() -> Path:
     return auth_path
 
 
-def refresh_managed_profile(profile_path: Path, cfg: dict[str, Any]) -> None:
+def refresh_managed_profile(profile_path: Path, cfg: dict[str, Any], service_id: str = "default") -> None:
     current = read_text(profile_path)
-    patched = patch_ovpn_for_local_system(current, credential_auth_path(cfg))
+    patched = patch_ovpn_for_local_system(current, service_auth_path(cfg, service_id))
     if patched != current:
         secure_write_text(profile_path, patched)
 
@@ -582,8 +707,11 @@ def refresh_managed_profile(profile_path: Path, cfg: dict[str, Any]) -> None:
 def import_profile(
     ovpn_path: Path,
     name: str | None,
+    service_id: str = "default",
 ) -> dict[str, Any]:
     cfg = load_config()
+    if not service_by_id(cfg, service_id):
+        raise ConnectVPNError(f"Service not found: {service_id}")
     source_ovpn = expand_path(ovpn_path)
     if not source_ovpn.exists():
         raise ConnectVPNError(f".ovpn file does not exist: {source_ovpn}")
@@ -591,11 +719,12 @@ def import_profile(
         raise ConnectVPNError("The profile must be a .ovpn file.")
 
     server_name = (name or source_ovpn.stem).strip() or source_ovpn.stem
-    auth_path = credential_auth_path(cfg)
+    auth_path = service_auth_path(cfg, service_id)
 
     for server in cfg.get("servers", []):
         if server.get("source_path") == str(source_ovpn):
             server["name"] = server_name
+            server["service_id"] = service_id
             profile_path = Path(server["ovpn_path"]).expanduser()
             ovpn_text = read_text(source_ovpn)
             patched = patch_ovpn_for_local_system(ovpn_text, auth_path)
@@ -615,6 +744,7 @@ def import_profile(
     server = {
         "id": server_id,
         "name": server_name,
+        "service_id": service_id,
         "source_path": str(source_ovpn),
         "ovpn_path": str(profile_path),
         "remotes": parse_remote_lines(ovpn_text),
@@ -626,7 +756,7 @@ def import_profile(
     return server
 
 
-def import_current_directory() -> list[dict[str, Any]]:
+def import_current_directory(service_id: str = "default") -> list[dict[str, Any]]:
     current = Path.cwd()
     profiles = sorted(current.glob("*.ovpn"))
     imported: list[dict[str, Any]] = []
@@ -637,7 +767,7 @@ def import_current_directory() -> list[dict[str, Any]]:
         resolved = str(ovpn_path.resolve())
         if resolved in already:
             continue
-        imported.append(import_profile(ovpn_path, ovpn_path.stem))
+        imported.append(import_profile(ovpn_path, ovpn_path.stem, service_id))
     return imported
 
 
@@ -803,7 +933,13 @@ def sudo_validate() -> None:
 
 def start_vpn(server: dict[str, Any]) -> dict[str, Any]:
     require_runtime_tools()
-    require_global_credentials()
+    cfg = load_config()
+    service_id = server.get("service_id", "default")
+    auth_path = service_auth_path(cfg, service_id)
+    if not auth_file_has_minimum_shape(auth_path):
+        service = service_by_id(cfg, service_id)
+        service_name = service.get("name", service_id) if service else service_id
+        raise ConnectVPNError(f"No credentials are configured for service '{service_name}'.")
     active = current_connection()
     if active:
         raise ConnectVPNError(f"A VPN is already active: {active.get('server_name', active.get('server_id'))}")
@@ -812,7 +948,7 @@ def start_vpn(server: dict[str, Any]) -> dict[str, Any]:
     if not profile_path.exists():
         raise ConnectVPNError(f"Managed profile does not exist: {profile_path}")
 
-    refresh_managed_profile(profile_path, load_config())
+    refresh_managed_profile(profile_path, cfg, service_id)
 
     ensure_dirs()
     log_path = LOGS_DIR / f"{server['id']}-{int(time.time())}.log"
@@ -1315,8 +1451,54 @@ class TUI:
             self.message("Could Not Save", [str(exc)])
             return False
 
+    def configure_service_credentials_manual(self, service: dict[str, Any]) -> bool:
+        username = self.prompt("Service Credentials", f"Username for {service['name']}:")
+        if username is None:
+            return False
+        password = self.prompt("Service Credentials", f"Password for {service['name']}:", secret=True)
+        if password is None:
+            return False
+        try:
+            auth_path = set_service_credentials(service["id"], username, password)
+            self.message("Credentials Saved", [f"Service: {service['name']}", f"Auth file: {auth_path}"])
+            return True
+        except ConnectVPNError as exc:
+            self.message("Could Not Save", [str(exc)])
+            return False
+
+    def choose_service(self) -> dict[str, Any] | None:
+        cfg = load_config()
+        self.selected_service_id = None
+        items: list[tuple[Any, ...]] = []
+        for service in cfg.get("services", []):
+            status = "configured" if service_credentials_ready(cfg, service["id"]) else "credentials pending"
+            items.append((f"{service['name']} [{status}]", lambda s=service: setattr(self, "selected_service_id", s["id"]), ""))
+        items.append(("Back", lambda: "back", "b"))
+        self.menu("Choose Service", items)
+        if self.selected_service_id is None:
+            return None
+        return service_by_id(load_config(), self.selected_service_id)
+
+    def add_service(self) -> None:
+        name = self.prompt("Add Service", "Service name:")
+        if name is None:
+            return
+        cfg = load_config()
+        try:
+            service = add_service(cfg, name)
+            save_config(cfg)
+            self.configure_service_credentials_manual(service)
+        except ConnectVPNError as exc:
+            self.message("Could Not Add", [str(exc)])
+
+    def configure_selected_service(self) -> None:
+        service = self.choose_service()
+        if service:
+            self.configure_service_credentials_manual(service)
+
     def credentials_menu(self) -> None:
         items: list[tuple[Any, ...]] = [
+            ("Configure credentials for a service", self.configure_selected_service, "s"),
             ("Enter username/password", self.configure_credentials_manual, "u"),
             ("Load from auth-user-pass file", self.configure_credentials_from_file, "f"),
             ("Back", lambda: "back", "b"),
@@ -1324,22 +1506,24 @@ class TUI:
         self.menu("Modify Credentials", items)
 
     def ensure_credentials_interactive(self) -> bool:
-        cfg = load_config()
-        if global_credentials_ready(cfg):
-            return True
+        return self.ensure_service_credentials_interactive("default")
 
+    def ensure_service_credentials_interactive(self, service_id: str) -> bool:
+        cfg = load_config()
+        if service_credentials_ready(cfg, service_id):
+            return True
+        service = service_by_id(cfg, service_id)
+        service_name = service.get("name", service_id) if service else service_id
         self.message(
             "First Run",
             [
-                "No global credentials are configured.",
-                "Save them once and every imported .ovpn server will use them automatically.",
+                f"No credentials are configured for {service_name}.",
+                "Save them once and every server from this service will use them automatically.",
             ],
         )
-        return self.configure_credentials_manual()
+        return bool(service and self.configure_service_credentials_manual(service))
 
     def connect_random(self) -> None:
-        if not self.ensure_credentials_interactive():
-            return
         cfg = load_config()
         servers = cfg.get("servers", [])
         if not servers:
@@ -1350,6 +1534,8 @@ class TUI:
         if current_connection():
             self.run_external("disconnecting current VPN", stop_vpn)
         server = random.choice(servers)
+        if not self.ensure_service_credentials_interactive(server.get("service_id", "default")):
+            return
         self.run_external(f"connecting to {server['name']}", lambda: start_vpn(server))
 
     def connect_chosen(self) -> None:
@@ -1369,7 +1555,7 @@ class TUI:
         self.menu("Choose Server", items)
 
     def connect_server(self, server: dict[str, Any]) -> None:
-        if not self.ensure_credentials_interactive():
+        if not self.ensure_service_credentials_interactive(server.get("service_id", "default")):
             return
         if current_connection() and not self.confirm("VPN Active", "A VPN is already active. Disconnect and switch?"):
             return
@@ -1378,6 +1564,9 @@ class TUI:
         self.run_external(f"connecting to {server['name']}", lambda: start_vpn(server))
 
     def add_server(self) -> None:
+        service = self.choose_service()
+        if not service:
+            return
         ovpn_path = self.pick_ovpn_file()
         if not ovpn_path:
             return
@@ -1387,7 +1576,7 @@ class TUI:
             return
 
         try:
-            server = import_profile(ovpn_path, name)
+            server = import_profile(ovpn_path, name, service["id"])
             self.message(
                 "Server Added",
                 [
@@ -1404,9 +1593,12 @@ class TUI:
         if not profiles:
             self.message("No Profiles", ["No .ovpn files were found in this directory."])
             return
+        service = self.choose_service()
+        if not service:
+            return
 
         try:
-            imported = import_current_directory()
+            imported = import_current_directory(service["id"])
             if imported:
                 self.message("Import Complete", [f"Imported: {len(imported)}"] + [s["name"] for s in imported])
             else:
@@ -1446,11 +1638,11 @@ class TUI:
         self.message("Status", lines)
 
     def run(self) -> None:
-        self.ensure_credentials_interactive()
         while self.running:
             items = [
                 ("Choose a server and connect", self.connect_chosen, "Enter"),
                 ("Connect to a random server", self.connect_random, "r"),
+                ("Add a new VPN service", self.add_service, "v"),
                 ("Add a new .ovpn server", self.add_server, "a"),
                 ("Import .ovpn files from this folder", self.import_cwd, "i"),
                 ("Modify global credentials", self.credentials_menu, "m"),
@@ -1548,6 +1740,19 @@ def ensure_global_credentials_cli() -> None:
     set_global_credentials(username, password)
 
 
+def ensure_service_credentials_cli(service_id: str) -> None:
+    cfg = load_config()
+    if service_credentials_ready(cfg, service_id):
+        return
+    service = service_by_id(cfg, service_id)
+    if not service:
+        raise ConnectVPNError(f"Service not found: {service_id}")
+    print(f"No credentials are configured for {service['name']}.")
+    username = input("OpenVPN username: ")
+    password = os.environ.get("CONNECTVPN_PASSWORD") or getpass.getpass("OpenVPN password: ")
+    set_service_credentials(service_id, username, password)
+
+
 def cli_import(args: argparse.Namespace) -> None:
     if args.auth_file:
         set_global_credentials_from_file(expand_path(args.auth_file))
@@ -1606,20 +1811,21 @@ def main(argv: list[str] | None = None) -> int:
             cli_import(args)
             return 0
         if args.random:
-            ensure_global_credentials_cli()
             cfg = load_config()
             servers = cfg.get("servers", [])
             if not servers:
                 raise ConnectVPNError("No imported servers.")
-            state = start_vpn(random.choice(servers))
+            server = random.choice(servers)
+            ensure_service_credentials_cli(server.get("service_id", "default"))
+            state = start_vpn(server)
             print(f"VPN active: {state['server_name']} (PID {state['pid']})")
             return 0
         if args.connect:
-            ensure_global_credentials_cli()
             cfg = load_config()
             server = find_server(cfg, args.connect)
             if not server:
                 raise ConnectVPNError(f"Server not found: {args.connect}")
+            ensure_service_credentials_cli(server.get("service_id", "default"))
             state = start_vpn(server)
             print(f"VPN active: {state['server_name']} (PID {state['pid']})")
             return 0

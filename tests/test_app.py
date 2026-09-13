@@ -119,6 +119,29 @@ class ConnectVPNTestCase(unittest.TestCase):
         self.assertNotIn("example-password", app.CONFIG_PATH.read_text(encoding="utf-8"))
         self.assertEqual(config["credentials"]["auth_path"], str(app.GLOBAL_AUTH_PATH))
 
+    def test_services_keep_credentials_and_profiles_separate(self) -> None:
+        cfg = app.load_config()
+        proton = app.add_service(cfg, "ProtonVPN")
+        nord = app.add_service(cfg, "NordVPN")
+        app.save_config(cfg)
+        app.set_service_credentials(proton["id"], "proton-user", "proton-password")
+        app.set_service_credentials(nord["id"], "nord-user", "nord-password")
+
+        proton_profile = self.write_profile("proton.ovpn")
+        nord_profile = self.write_profile("nord.ovpn")
+        proton_server = app.import_profile(proton_profile, "Proton", proton["id"])
+        nord_server = app.import_profile(nord_profile, "Nord", nord["id"])
+
+        proton_text = Path(proton_server["ovpn_path"]).read_text(encoding="utf-8")
+        nord_text = Path(nord_server["ovpn_path"]).read_text(encoding="utf-8")
+        self.assertEqual(proton_server["service_id"], proton["id"])
+        self.assertEqual(nord_server["service_id"], nord["id"])
+        self.assertIn(str(app.service_auth_path(app.load_config(), proton["id"])), proton_text)
+        self.assertIn(str(app.service_auth_path(app.load_config(), nord["id"])), nord_text)
+        self.assertNotEqual(app.service_auth_path(app.load_config(), proton["id"]), app.service_auth_path(app.load_config(), nord["id"]))
+        self.assertIn("proton-password", app.service_auth_path(app.load_config(), proton["id"]).read_text(encoding="utf-8"))
+        self.assertIn("nord-password", app.service_auth_path(app.load_config(), nord["id"]).read_text(encoding="utf-8"))
+
     def test_import_profile_updates_existing_source_without_duplicate(self) -> None:
         app.set_global_credentials("example-user", "example-password")
         source = self.write_profile()
